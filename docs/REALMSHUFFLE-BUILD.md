@@ -1,4 +1,4 @@
-# RealmShuffle VR 0.7.2 build notes
+# RealmShuffle VR development build notes
 
 Base: Immivio 1.0.2, commit 10f5bb87d628e84e53af0cf5054b522bdb15a137. Consult [upstream build documentation](BUILD.md) and [licensing](LICENSING.md) for the original native build and dependencies.
 
@@ -24,3 +24,15 @@ Use the original Immivio Quest 1.0.2 web release APK (2026-11-22), SHA256 4BC64F
 Use your own signing key; keep it private. The experimental package ID is com.northboundwisdom.immivio.dev, distinct from the upstream package. Updates require matching signing certificates. The original binary layout is version-specific; do not assume compatibility with newer releases.
 
 The packager replaces six compiled scripts and their remaps, preserving the original native libraries. All twelve resources were verified against the tested APK. The full native build correspondence and redistribution review remain pending; this is not a claim of complete reproducibility or a public binary release.
+
+## 0.7.3 Lite texture optimization
+
+After packaging and branding the 0.7.3 baseline, use the optimized export from this branch to replace the panorama resources before final alignment and signing:
+
+    python tools/realmshuffle/patch_optimized_textures.py patch icons.apk Resources.zip lite-unsigned.apk
+    zipalign -f -P 16 4 lite-unsigned.apk lite-aligned.apk
+    apksigner sign --ks YOUR_KEYSTORE --ks-key-alias YOUR_ALIAS --out RealmShuffle-Lite.apk lite-aligned.apk
+    apksigner verify --verbose RealmShuffle-Lite.apk
+    python tools/realmshuffle/patch_optimized_textures.py verify icons.apk Resources.zip RealmShuffle-Lite.apk
+
+The patcher validates the sparse resource index, expected texture paths and unchanged APK entries. The tested baseline was the signed local 0.7.3 build; the unsigned branded baseline variant above has not been separately tested. Use the matching original APK layout and signing identity. All 16 targeted resources (scripts, remaps and panoramas) matched the installed Lite APK. Full native source build and distribution review remain pending.
