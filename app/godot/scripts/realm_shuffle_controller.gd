@@ -15,7 +15,7 @@ var _duration_known := false
 
 func _init(host: Node3D) -> void:
     _host_ref = weakref(host)
-    print("[RealmShuffle 0.7.2] Controller initialized")
+    print("[RealmShuffle 0.7.3] Controller initialized")
 
 func activate() -> bool:
     var host := _host_ref.get_ref() as Node3D
@@ -116,19 +116,28 @@ func _open(uri: String) -> void:
         _opening = false
         print("[RealmShuffle] Open rejected: ", uri)
 
-func next_scene() -> void:
+func next_scene(reason: String = "automatic") -> void:
     if active and not _opening and not transition_active:
-        _transition_to(engine.next_scene())
+        var destination: String = engine.next_scene()
+        _usage_video_navigation(destination, reason)
+        _transition_to(destination)
 
 func previous_scene() -> void:
     if active and not _opening and not transition_active:
-        _transition_to(engine.previous_scene())
+        var destination: String = engine.previous_scene()
+        _usage_video_navigation(destination, "previous")
+        _transition_to(destination)
 
 func toggle_automatic() -> void:
     if not active:
         activate()
         return
     engine.automatic = not engine.automatic
+    _usage_write("video", "automatic_changed", {
+        "enabled": engine.automatic,
+        "media_id": _usage_video_id,
+        "active_seconds": _usage_video_seconds
+    })
     print("[RealmShuffle] Automatic advancement: ", engine.automatic)
 
 func tick(delta: float) -> void:
@@ -136,6 +145,7 @@ func tick(delta: float) -> void:
     if not is_instance_valid(host) or not host.video:
         return
 
+    _usage_tick(host, delta)
     _performance_tick(host, delta)
     _frame_hold_diagnostics(host)
     _music_tick(host, delta)
@@ -200,14 +210,14 @@ func tick(delta: float) -> void:
     if engine.requires_loop(engine.original_duration):
         if engine.tick(delta, true):
             print("[RealmShuffle] Adaptive duration reached")
-            next_scene()
+            next_scene("adaptive_complete")
 
     _quiet_end_tick(host, delta)
 
 func handle_ended() -> void:
     if active and engine.automatic and not _opening:
         print("[RealmShuffle] Natural video ending")
-        next_scene()
+        next_scene("natural_complete")
 
 func handle_button(action: String, hand: String) -> bool:
     var host := _host_ref.get_ref() as Node3D
@@ -237,7 +247,7 @@ func handle_button(action: String, hand: String) -> bool:
     match action:
         "ax_button":
             if hand == "right_hand":
-                next_scene()
+                next_scene("manual_next")
             elif hand == "left_hand":
                 _toggle_video_only(host)
             return true
@@ -1002,6 +1012,8 @@ func _enforce_vr180(video) -> void:
 func next_music_track() -> void:
     if not active:
         return
+
+    _usage_music_navigation("manual_next")
 
     _scene_sync_enabled = false
     _sync_loaded_uri = ""
@@ -1803,6 +1815,7 @@ func sync_current_scene() -> void:
     if not is_instance_valid(host) or not host.video:
         return
 
+    _usage_music_navigation("sync_requested")
     _scene_sync_enabled = true
 
     if not is_instance_valid(_music_player):
@@ -1827,6 +1840,13 @@ func sync_current_scene() -> void:
 
 
 func _on_music_finished() -> void:
+
+    _usage_write("music", "natural_end", {
+        "media_id": _usage_music_id,
+        "active_seconds": _usage_music_seconds,
+        "mode": _usage_music_mode()
+    })
+    _usage_music_reason = "natural_complete"
 
     if (
         _scene_sync_enabled
@@ -2086,7 +2106,7 @@ func _quiet_end_tick(host: Node3D, delta: float) -> void:
                 " | Remaining ms: ", remaining
             )
 
-            next_scene()
+            next_scene("natural_complete")
 
 
 # REALMSHUFFLE_FRAME_HOLD
@@ -2474,3 +2494,360 @@ func _performance_tick(host: Node3D, delta: float) -> void:
                 "native_detail_keys": details.keys()
             })
         )
+
+
+# REALMSHUFFLE_USAGE_JOURNAL
+
+const USAGE_DIR := "/sdcard/Movies/RealmShuffle/Logs"
+const USAGE_CHECKPOINT_SECONDS := 30.0
+
+var _usage_ready := false
+var _usage_warned := false
+var _usage_session := ""
+var _usage_sequence := 0
+
+var _usage_video_id := ""
+var _usage_video_uri := ""
+var _usage_video_session := -1
+var _usage_video_seconds := 0.0
+var _usage_video_duration := 0.0
+var _usage_video_position := 0.0
+var _usage_video_reason := ""
+var _usage_video_destination := ""
+
+var _usage_music_id := ""
+var _usage_music_seconds := 0.0
+var _usage_music_duration := 0.0
+var _usage_music_position := 0.0
+var _usage_music_reason := ""
+var _usage_music_previous_mode := ""
+
+var _usage_checkpoint := 0.0
+
+
+func _usage_initialize() -> bool:
+    if _usage_ready:
+        return true
+
+    var result := DirAccess.make_dir_recursive_absolute(
+        USAGE_DIR
+    )
+
+    if result != OK:
+        if not _usage_warned:
+            print("[RealmShuffle Usage] Log directory unavailable: ", result)
+            _usage_warned = true
+        return false
+
+    _usage_session = (
+        str(Time.get_unix_time_from_system())
+        + "-"
+        + str(Time.get_ticks_usec())
+    )
+
+    _usage_ready = true
+
+    print("[RealmShuffle Usage] Persistent journal initialized")
+
+    return true
+
+
+func _usage_write(
+    kind: String,
+    event: String,
+    fields: Dictionary
+) -> void:
+
+    if not _usage_initialize():
+        return
+
+    _usage_sequence += 1
+
+    var record := fields.duplicate(true)
+
+    record["schema"] = 1
+    record["session_id"] = _usage_session
+    record["sequence"] = _usage_sequence
+    record["timestamp_unix"] = Time.get_unix_time_from_system()
+    record["monotonic_ms"] = Time.get_ticks_msec()
+    record["event"] = event
+    record["kind"] = kind
+
+    var filename := (
+        "Video-Events.jsonl"
+        if kind == "video"
+        else "Music-Events.jsonl"
+    )
+
+    var path := USAGE_DIR.path_join(filename)
+
+    var mode := (
+        FileAccess.READ_WRITE
+        if FileAccess.file_exists(path)
+        else FileAccess.WRITE
+    )
+
+    var file := FileAccess.open(path, mode)
+
+    if file == null:
+        print("[RealmShuffle Usage] Cannot write: ", path)
+        return
+
+    file.seek_end()
+    file.store_line(JSON.stringify(record))
+    file.flush()
+    file.close()
+
+    if event != "checkpoint":
+        print(
+            "[RealmShuffle Usage] ",
+            kind, " | ", event, " | ",
+            record.get("media_id", "")
+        )
+
+
+func _usage_media_id(path: String) -> String:
+    return path.uri_decode().get_file().to_lower()
+
+
+func _usage_fraction(
+    seconds: float,
+    duration: float
+) -> float:
+
+    if duration <= 0.0:
+        return 0.0
+
+    return clampf(seconds / duration, 0.0, 1.0)
+
+
+func _usage_music_mode() -> String:
+    if _scene_sync_enabled and not _sync_track_path.is_empty():
+        return "matched"
+
+    return "random"
+
+
+func _usage_video_fields() -> Dictionary:
+    return {
+        "media_id": _usage_video_id,
+        "uri": _usage_video_uri,
+        "active_seconds": _usage_video_seconds,
+        "natural_duration": _usage_video_duration,
+        "position_seconds": _usage_video_position,
+        "exposure_fraction": _usage_fraction(
+            _usage_video_seconds,
+            _usage_video_duration
+        )
+    }
+
+
+func _usage_music_fields() -> Dictionary:
+    return {
+        "media_id": _usage_music_id,
+        "active_seconds": _usage_music_seconds,
+        "natural_duration": _usage_music_duration,
+        "position_seconds": _usage_music_position,
+        "exposure_fraction": _usage_fraction(
+            _usage_music_seconds,
+            _usage_music_duration
+        ),
+        "mode": _usage_music_previous_mode
+    }
+
+
+func _usage_video_navigation(
+    destination: String,
+    reason: String
+) -> void:
+
+    if destination.is_empty():
+        return
+
+    if destination == _usage_video_uri:
+        return
+
+    _usage_video_reason = reason
+    _usage_video_destination = destination
+
+    var fields := _usage_video_fields()
+
+    fields["reason"] = reason
+    fields["destination_id"] = _usage_media_id(destination)
+
+    _usage_write("video", "navigation_requested", fields)
+
+
+func _usage_music_navigation(reason: String) -> void:
+    _usage_music_reason = reason
+
+    var fields := _usage_music_fields()
+    fields["reason"] = reason
+
+    _usage_write("music", "navigation_requested", fields)
+
+
+func _usage_tick(host: Node3D, delta: float) -> void:
+    if not active:
+        return
+
+    var video = host.video
+
+    # Ignore unusually large frame intervals so suspended
+    # applications do not inflate viewing/listening time.
+
+    var elapsed := clampf(delta, 0.0, 0.25)
+
+    var uri: String = str(video.local_uri)
+    var media_id := _usage_media_id(uri)
+    var session: int = int(video.media.session_id)
+
+    var ready: bool = (
+        not uri.is_empty()
+        and video.control.duration_ms > 0
+        and video.media.state == "playing"
+        and video.media.error.is_empty()
+        and not video.waiting_for_first_frame()
+    )
+
+    if ready and (
+        uri != _usage_video_uri
+        or session != _usage_video_session
+    ):
+
+        var reason := "observed_selection"
+
+        if uri == _usage_video_destination:
+            reason = _usage_video_reason
+
+        if not _usage_video_id.is_empty():
+
+            var previous := _usage_video_fields()
+            previous["reason"] = reason
+            previous["destination_id"] = media_id
+
+            _usage_write("video", "playback_end", previous)
+
+        _usage_video_uri = uri
+        _usage_video_id = media_id
+        _usage_video_session = session
+        _usage_video_seconds = 0.0
+        _usage_video_duration = (
+            float(video.control.duration_ms) / 1000.0
+        )
+
+        _usage_video_position = (
+            float(video.control.observed_position_ms) / 1000.0
+        )
+
+        var started := _usage_video_fields()
+        started["selection_reason"] = reason
+
+        _usage_write("video", "playback_start", started)
+
+        _usage_video_reason = ""
+        _usage_video_destination = ""
+
+    if ready and uri == _usage_video_uri:
+
+        _usage_video_position = (
+            float(video.control.observed_position_ms) / 1000.0
+        )
+
+        if (
+            host.wearer_present
+            and video.requested_play
+            and not transition_active
+            and not _opening
+            and not video.control.pending
+            and video.control.in_flight == 0
+            and not video.stick_scrubbing
+        ):
+            _usage_video_seconds += elapsed
+
+    if is_instance_valid(_music_player):
+
+        var path: String = _current_music_path
+        var music_id := _usage_media_id(path)
+
+        if (
+            _music_player.stream != null
+            and _music_player.playing
+            and not music_id.is_empty()
+            and music_id != _usage_music_id
+        ):
+
+            if not _usage_music_id.is_empty():
+
+                var ended := _usage_music_fields()
+
+                ended["reason"] = (
+                    _usage_music_reason
+                    if not _usage_music_reason.is_empty()
+                    else "automatic_change"
+                )
+
+                ended["destination_id"] = music_id
+
+                _usage_write("music", "playback_end", ended)
+
+            _usage_music_id = music_id
+            _usage_music_seconds = 0.0
+            _usage_music_duration = _music_player.stream.get_length()
+            _usage_music_position = _music_player.get_playback_position()
+            _usage_music_previous_mode = _usage_music_mode()
+
+            var started_music := _usage_music_fields()
+
+            started_music["selection_reason"] = (
+                _usage_music_reason
+                if not _usage_music_reason.is_empty()
+                else "automatic"
+            )
+
+            _usage_write("music", "playback_start", started_music)
+
+            _usage_music_reason = ""
+
+        if (
+            _music_player.playing
+            and music_id == _usage_music_id
+            and not music_id.is_empty()
+        ):
+
+            _usage_music_position = _music_player.get_playback_position()
+
+            var current_mode := _usage_music_mode()
+
+            if current_mode != _usage_music_previous_mode:
+
+                _usage_write("music", "mode_changed", {
+                    "media_id": music_id,
+                    "previous_mode": _usage_music_previous_mode,
+                    "mode": current_mode
+                })
+
+                _usage_music_previous_mode = current_mode
+                _usage_music_reason = ""
+
+            if (
+                host.wearer_present
+                and not _music_player.stream_paused
+            ):
+                _usage_music_seconds += elapsed
+
+    _usage_checkpoint += elapsed
+
+    if _usage_checkpoint >= USAGE_CHECKPOINT_SECONDS:
+
+        _usage_checkpoint = 0.0
+
+        if not _usage_video_id.is_empty():
+            _usage_write(
+                "video", "checkpoint", _usage_video_fields()
+            )
+
+        if not _usage_music_id.is_empty():
+            _usage_write(
+                "music", "checkpoint", _usage_music_fields()
+            )
