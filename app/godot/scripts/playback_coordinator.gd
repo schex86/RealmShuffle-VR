@@ -187,6 +187,9 @@ func _advance_queue(session_id: int, uri: String) -> void:
 		or (not host.video.completed_presentation())
 	):
 		return
+	if host.realm_shuffle != null and host.realm_shuffle.active:
+		host.realm_shuffle.handle_ended()
+		return
 	if host.video.loop_enabled:
 		return
 	var item = host.playback_queue.adjacent(uri, 1, host.playback_queue.loop)
@@ -278,7 +281,10 @@ func _on_menu_action(operation: String) -> void:
 		"open_file":
 			host.presentation_coordinator._show_library_menu()
 		"play":
-			host.video.toggle_play()
+			if host.realm_shuffle != null and host.realm_shuffle.active:
+				host.realm_shuffle.toggle_full_pause(host)
+			else:
+				host.video.toggle_play()
 		"clone_voice":
 			if host.video.toggle_clone_voice():
 				host.settings.set_value(

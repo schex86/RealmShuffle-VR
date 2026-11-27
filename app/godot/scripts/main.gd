@@ -523,7 +523,12 @@ var _external_poll_ms := 0
 var seek_step := 10
 
 
+var realm_shuffle = null
+
 func _process(delta: float) -> void:
+	if realm_shuffle == null:
+		realm_shuffle = preload("res://scripts/realm_shuffle_controller.gd").new(self)
+	realm_shuffle.tick(delta)
 	if (
 		video
 		and Time.get_ticks_msec() >= _external_poll_ms

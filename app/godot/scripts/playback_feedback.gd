@@ -47,6 +47,16 @@ func snapshot() -> Dictionary:
 
 
 func tick() -> void:
+	if is_instance_valid(host) and host.realm_shuffle != null:
+		if (
+			host.realm_shuffle.active
+			or host.realm_shuffle.transition_active
+		):
+			if host.video.media.error.is_empty():
+				since = 0
+				message = ""
+				visible = false
+				return
 	if not is_instance_valid(host.video_menu):
 		return
 	var video: Node3D = host.video

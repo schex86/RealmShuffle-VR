@@ -233,6 +233,11 @@ func _on_controller_button(action: String, hand: String = "") -> void:
 		return
 	if host.input_visuals:
 		host.input_visuals.controller_activity(hand)
+	if host.realm_shuffle != null:
+		if host.realm_shuffle.handle_button(action, hand):
+			if action == "grip_click":
+				immersive_grips.erase(hand)
+			return
 	if action == "grip_click":
 		immersive_grips[hand] = true
 	_on_pointer_button(action, hand)
@@ -311,7 +316,8 @@ func _on_pointer_button(action: String, hand: String) -> void:
 			host.presentation_coordinator._show_library_menu()
 		"primary_click":
 			if hand == "left_hand":
-				host.video.cycle_projection()
+				if host.realm_shuffle != null and host.realm_shuffle.active:
+					host.realm_shuffle.next_music_track()
 			else:
 				host.presentation_coordinator._reset_picture()
 
@@ -320,6 +326,9 @@ func _process_sticks(left: Vector2, right: Vector2, delta: float) -> void:
 	var host := _host_ref.get_ref() as Node3D
 	if not is_instance_valid(host):
 		return
+	if host.realm_shuffle != null:
+		if host.realm_shuffle.handle_binaural_stick(left):
+			left = Vector2.ZERO
 	if host.input_visuals and host.input_source.input_focused():
 		if left.length() >= 0.3:
 			host.input_visuals.controller_activity("left_hand")
